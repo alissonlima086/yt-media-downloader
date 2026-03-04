@@ -22,7 +22,7 @@ Aplicação para download de áudio e vídeo do YouTube com interface web local.
 ## Como rodar
 
 ```bash
-docker-compose up --build
+docker compose up --build
 ```
 
 Acesse no navegador: 
@@ -33,10 +33,11 @@ http://localhost:3001
 (Remapear porta no docker compose caso necessário)
 
 
+
 Para parar:
 
 ```bash
-docker-compose down
+docker compose down
 ```
 
 ## Detalhes técnicos
@@ -56,6 +57,8 @@ O FastAPI gera automaticamente a interface de documentação e testes interativo
 http://localhost:8000/docs
 ```
 (Remapear porta no docker compose caso necessário)
+
+
 
 ### Frontend
 
