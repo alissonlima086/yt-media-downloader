@@ -1,0 +1,15 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - downloads:/app/downloads
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3001:80"
+
+volumes:
+  downloads:

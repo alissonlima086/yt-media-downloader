@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <title>YT Media Downloader</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<div class="container">
+    <header>
+        <div class="logo">▶</div>
+        <h1>YT Media Downloader</h1>
+    </header>
+
+    <div class="input-row">
+        <input type="text" id="url" placeholder="Cole o link aqui..." autocomplete="off" spellcheck="false">
+    </div>
+
+    <!-- Preview -->
+    <div class="video-preview" id="preview" style="display:none">
+        <div class="thumb-wrap"><img id="preview-thumb" src="" alt=""></div>
+        <div class="preview-info">
+            <div class="preview-title" id="preview-title"></div>
+            <div class="preview-duration" id="preview-duration"></div>
+        </div>
+    </div>
+
+    <div class="preview-loading" id="preview-loading" style="display:none">
+        <div class="spinner"></div>
+        <span>Buscando informações...</span>
+    </div>
+
+    <!-- Mode toggle -->
+    <div class="mode-toggle" id="mode-toggle" style="display:none">
+        <button class="mode-btn active" id="btn-mode-audio" onclick="setMode('audio')">Áudio</button>
+        <button class="mode-btn" id="btn-mode-video" onclick="setMode('video')">Vídeo</button>
+    </div>
+
+    <!-- Audio controls -->
+    <div class="controls" id="controls-audio" style="display:none">
+        <select id="audio-format">
+            <option value="flac">FLAC</option>
+            <option value="mp3">MP3</option>
+            <option value="m4a">M4A</option>
+            <option value="opus">OPUS</option>
+        </select>
+        <button id="btn-download" onclick="baixar()" disabled>Baixar</button>
+    </div>
+
+    <!-- Video controls -->
+    <div class="controls" id="controls-video" style="display:none">
+        <select id="video-quality">
+            <option value="best">Melhor disponível</option>
+        </select>
+        <select id="video-format">
+            <option value="mp4">MP4</option>
+            <option value="mkv">MKV</option>
+        </select>
+        <button id="btn-download-video" onclick="baixar()" disabled>Baixar</button>
+    </div>
+
+    <!-- Progress -->
+    <div class="progress-wrap" id="progress-wrap" style="display:none">
+        <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div class="progress-label" id="progress-label">0%</div>
+    </div>
+
+    <div class="status" id="status"></div>
+
+    <footer class="footer">
+        <a href="https://github.com/alissonlima086" target="_blank">
+            github.com/alissonlima086
+        </a>
+    </footer>
+</div>
+
+<script>
+const API = "http://localhost:8000";
+let debounceTimer = null;
+let videoLoaded = false;
+let currentMode = "audio";
+let availableQualities = [];
+
+const urlInput = document.getElementById("url");
+
+urlInput.addEventListener("input", () => {
+    clearTimeout(debounceTimer);
+    const val = urlInput.value.trim();
+    if (!val) { resetPreview(); return; }
+    debounceTimer = setTimeout(() => fetchInfo(val), 700);
+});
+
+function setMode(mode) {
+    currentMode = mode;
+
+    document.getElementById("btn-mode-audio").classList.toggle("active", mode === "audio");
+    document.getElementById("btn-mode-video").classList.toggle("active", mode === "video");
+    document.getElementById("controls-audio").style.display = mode === "audio" ? "flex" : "none";
+    document.getElementById("controls-video").style.display = mode === "video" ? "flex" : "none";
+}
+
+function resetPreview() {
+    videoLoaded = false;
+    document.getElementById("preview").style.display = "none";
+    document.getElementById("preview-loading").style.display = "none";
+    document.getElementById("mode-toggle").style.display = "none";
+    document.getElementById("controls-audio").style.display = "none";
+    document.getElementById("controls-video").style.display = "none";
+    document.getElementById("btn-download").disabled = true;
+    document.getElementById("btn-download-video").disabled = true;
+    setStatus("");
+}
+
+async function fetchInfo(url) {
+    document.getElementById("preview").style.display = "none";
+    document.getElementById("preview-loading").style.display = "flex";
+    document.getElementById("mode-toggle").style.display = "none";
+    document.getElementById("btn-download").disabled = true;
+    document.getElementById("btn-download-video").disabled = true;
+    setStatus("");
+
+    try {
+        const res = await fetch(`${API}/info`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url })
+        });
+
+        document.getElementById("preview-loading").style.display = "none";
+
+        if (!res.ok) { setStatus("Não foi possível carregar o vídeo.", "error"); return; }
+
+        const data = await res.json();
+
+        document.getElementById("preview-thumb").src = data.thumbnail;
+        document.getElementById("preview-title").textContent = data.title;
+        document.getElementById("preview-duration").textContent = data.duration;
+        document.getElementById("preview").style.display = "flex";
+
+        // Populate quality select
+        availableQualities = data.qualities || [];
+        const qualSel = document.getElementById("video-quality");
+        qualSel.innerHTML = '<option value="best">Melhor disponível</option>';
+        availableQualities.forEach(q => {
+            const opt = document.createElement("option");
+            opt.value = q.format_id;
+            opt.textContent = q.label;
+            qualSel.appendChild(opt);
+        });
+
+        videoLoaded = true;
+        document.getElementById("btn-download").disabled = false;
+        document.getElementById("btn-download-video").disabled = false;
+
+        // Show mode toggle + default controls
+        document.getElementById("mode-toggle").style.display = "flex";
+        setMode(currentMode);
+
+    } catch {
+        document.getElementById("preview-loading").style.display = "none";
+        setStatus("Erro ao buscar informações.", "error");
+    }
+}
+
+async function baixar() {
+    if (!videoLoaded) return;
+
+    const url = urlInput.value.trim();
+    let format, quality, mode;
+
+    if (currentMode === "audio") {
+        mode = "audio";
+        format = document.getElementById("audio-format").value;
+        quality = "bestaudio";
+        document.getElementById("btn-download").disabled = true;
+    } else {
+        mode = "video";
+        format = document.getElementById("video-format").value;
+        quality = document.getElementById("video-quality").value;
+        document.getElementById("btn-download-video").disabled = true;
+    }
+
+    setStatus("Iniciando download...", "info");
+    showProgress(0);
+
+    const response = await fetch(`${API}/download`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, mode, format, quality })
+    });
+
+    if (!response.ok) {
+        setStatus("Erro ao iniciar o download.", "error");
+        hideProgress();
+        enableButtons();
+        return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+
+        for (const line of lines) {
+            if (!line.startsWith("data: ")) continue;
+            try {
+                const event = JSON.parse(line.slice(6));
+
+                if (event.type === "progress") {
+                    showProgress(event.percent);
+                    setStatus(`Baixando... ${Math.round(event.percent)}%`, "info");
+                }
+
+                if (event.type === "done") {
+                    showProgress(100);
+                    setStatus("Concluído!", "success");
+                    setTimeout(() => {
+                        const a = document.createElement("a");
+                        a.href = `${API}/file/${event.file_id}?filename=${encodeURIComponent(event.filename)}&format=${event.format}`;
+                        a.download = event.filename;
+                        a.click();
+                        setTimeout(() => { hideProgress(); enableButtons(); }, 1500);
+                    }, 300);
+                }
+
+                if (event.type === "error") {
+                    setStatus(event.message, "error");
+                    hideProgress();
+                    enableButtons();
+                }
+            } catch {}
+        }
+    }
+}
+
+function enableButtons() {
+    document.getElementById("btn-download").disabled = false;
+    document.getElementById("btn-download-video").disabled = false;
+}
+
+function showProgress(percent) {
+    document.getElementById("progress-wrap").style.display = "flex";
+    document.getElementById("progress-fill").style.width = `${percent}%`;
+    document.getElementById("progress-label").textContent = `${Math.round(percent)}%`;
+}
+
+function hideProgress() {
+    setTimeout(() => {
+        document.getElementById("progress-wrap").style.display = "none";
+    }, 800);
+}
+
+function setStatus(msg, type = "") {
+    const el = document.getElementById("status");
+    el.textContent = msg;
+    el.className = "status " + type;
+}
+</script>
+
+</body>
+</html>
