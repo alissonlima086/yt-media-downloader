@@ -32,6 +32,7 @@ http://localhost:3001
 ```
 (Remapear porta no docker compose caso necessário)
 
+
 Para parar:
 
 ```bash
@@ -54,12 +55,13 @@ O FastAPI gera automaticamente a interface de documentação e testes interativo
 ```
 http://localhost:8000/docs
 ```
+(Remapear porta no docker compose caso necessário)
 
 ### Frontend
 
 O imput do formulário detecta automaticamente o link digitado e chama o `/info`. O download consome o stream do SSE atualizando a barra de progressão.
 
-## Dependências principais
+### Dependências principais
 | Ferramenta | Função |
 |---|---|
 | [yt-dlp](https://github.com/yt-dlp/yt-dlp) | Download e extração de áudio/vídeo |
