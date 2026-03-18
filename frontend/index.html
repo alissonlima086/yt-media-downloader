@@ -19,13 +19,27 @@
         <input type="text" id="url" placeholder="Cole o link aqui..." autocomplete="off" spellcheck="false">
     </div>
 
-    <!-- Preview -->
+    <!-- Single video preview -->
     <div class="video-preview" id="preview" style="display:none">
         <div class="thumb-wrap"><img id="preview-thumb" src="" alt=""></div>
         <div class="preview-info">
             <div class="preview-title" id="preview-title"></div>
-            <div class="preview-duration" id="preview-duration"></div>
+            <div class="preview-meta">
+                <span class="preview-duration" id="preview-duration"></span>
+            </div>
         </div>
+    </div>
+
+    <!-- Playlist preview -->
+    <div class="playlist-preview" id="playlist-preview" style="display:none">
+        <div class="playlist-header">
+            <div class="playlist-icon">☰</div>
+            <div class="playlist-meta">
+                <div class="playlist-title" id="playlist-title"></div>
+                <div class="playlist-count" id="playlist-count"></div>
+            </div>
+        </div>
+        <div class="playlist-tracks" id="playlist-tracks"></div>
     </div>
 
     <div class="preview-loading" id="preview-loading" style="display:none">
@@ -64,10 +78,13 @@
 
     <!-- Progress -->
     <div class="progress-wrap" id="progress-wrap" style="display:none">
-        <div class="progress-bar">
-            <div class="progress-fill" id="progress-fill"></div>
+        <div class="progress-track-info" id="progress-track-info" style="display:none"></div>
+        <div class="progress-bar-row">
+            <div class="progress-bar">
+                <div class="progress-fill" id="progress-fill"></div>
+            </div>
+            <div class="progress-label" id="progress-label">0%</div>
         </div>
-        <div class="progress-label" id="progress-label">0%</div>
     </div>
 
     <div class="status" id="status"></div>
@@ -82,9 +99,11 @@
 <script>
 const API = "http://localhost:8000";
 let debounceTimer = null;
-let videoLoaded = false;
+let mediaLoaded = false;
 let currentMode = "audio";
 let availableQualities = [];
+let isPlaylist = false;
+let playlistInfo = null;
 
 const urlInput = document.getElementById("url");
 
@@ -105,8 +124,11 @@ function setMode(mode) {
 }
 
 function resetPreview() {
-    videoLoaded = false;
+    mediaLoaded = false;
+    isPlaylist = false;
+    playlistInfo = null;
     document.getElementById("preview").style.display = "none";
+    document.getElementById("playlist-preview").style.display = "none";
     document.getElementById("preview-loading").style.display = "none";
     document.getElementById("mode-toggle").style.display = "none";
     document.getElementById("controls-audio").style.display = "none";
@@ -118,6 +140,7 @@ function resetPreview() {
 
 async function fetchInfo(url) {
     document.getElementById("preview").style.display = "none";
+    document.getElementById("playlist-preview").style.display = "none";
     document.getElementById("preview-loading").style.display = "flex";
     document.getElementById("mode-toggle").style.display = "none";
     document.getElementById("btn-download").disabled = true;
@@ -133,31 +156,19 @@ async function fetchInfo(url) {
 
         document.getElementById("preview-loading").style.display = "none";
 
-        if (!res.ok) { setStatus("Não foi possível carregar o vídeo.", "error"); return; }
+        if (!res.ok) { setStatus("Não foi possível carregar o conteúdo.", "error"); return; }
 
         const data = await res.json();
 
-        document.getElementById("preview-thumb").src = data.thumbnail;
-        document.getElementById("preview-title").textContent = data.title;
-        document.getElementById("preview-duration").textContent = data.duration;
-        document.getElementById("preview").style.display = "flex";
+        if (data.type === "playlist") {
+            renderPlaylistPreview(data);
+        } else {
+            renderVideoPreview(data);
+        }
 
-        // Populate quality select
-        availableQualities = data.qualities || [];
-        const qualSel = document.getElementById("video-quality");
-        qualSel.innerHTML = '<option value="best">Melhor disponível</option>';
-        availableQualities.forEach(q => {
-            const opt = document.createElement("option");
-            opt.value = q.format_id;
-            opt.textContent = q.label;
-            qualSel.appendChild(opt);
-        });
-
-        videoLoaded = true;
+        mediaLoaded = true;
         document.getElementById("btn-download").disabled = false;
         document.getElementById("btn-download-video").disabled = false;
-
-        // Show mode toggle + default controls
         document.getElementById("mode-toggle").style.display = "flex";
         setMode(currentMode);
 
@@ -167,8 +178,82 @@ async function fetchInfo(url) {
     }
 }
 
+function renderVideoPreview(data) {
+    isPlaylist = false;
+    document.getElementById("preview-thumb").src = data.thumbnail;
+    document.getElementById("preview-title").textContent = data.title;
+    document.getElementById("preview-duration").textContent = data.duration;
+    document.getElementById("preview").style.display = "flex";
+
+    availableQualities = data.qualities || [];
+    const qualSel = document.getElementById("video-quality");
+    qualSel.innerHTML = '<option value="best">Melhor disponível</option>';
+    availableQualities.forEach(q => {
+        const opt = document.createElement("option");
+        opt.value = q.format_id;
+        opt.textContent = q.label;
+        qualSel.appendChild(opt);
+    });
+}
+
+function renderPlaylistPreview(data) {
+    isPlaylist = true;
+    playlistInfo = data;
+
+    document.getElementById("playlist-title").textContent = data.playlist_title || "Playlist";
+    document.getElementById("playlist-count").textContent = `${data.count} faixa${data.count !== 1 ? "s" : ""}`;
+
+    const tracksEl = document.getElementById("playlist-tracks");
+    tracksEl.innerHTML = "";
+
+    const MAX_VISIBLE = 5;
+    const entries = data.entries || [];
+
+    entries.slice(0, MAX_VISIBLE).forEach((entry, i) => {
+        tracksEl.appendChild(createTrackRow(i + 1, entry));
+    });
+
+    if (entries.length > MAX_VISIBLE) {
+        const more = document.createElement("div");
+        more.className = "playlist-more";
+        more.textContent = `+ ${entries.length - MAX_VISIBLE} mais faixas`;
+        tracksEl.appendChild(more);
+    }
+
+    document.getElementById("playlist-preview").style.display = "flex";
+
+    // Playlist downloads don't support quality selection (always bestaudio/bestvideo)
+    document.getElementById("video-quality").innerHTML = '<option value="best">Melhor disponível</option>';
+}
+
+function createTrackRow(index, entry) {
+    const row = document.createElement("div");
+    row.className = "track-row";
+
+    const num = document.createElement("span");
+    num.className = "track-num";
+    num.textContent = String(index).padStart(2, "0");
+
+    const info = document.createElement("div");
+    info.className = "track-info";
+
+    const title = document.createElement("span");
+    title.className = "track-title";
+    title.textContent = entry.title;
+
+    const dur = document.createElement("span");
+    dur.className = "track-duration";
+    dur.textContent = entry.duration || "";
+
+    info.appendChild(title);
+    info.appendChild(dur);
+    row.appendChild(num);
+    row.appendChild(info);
+    return row;
+}
+
 async function baixar() {
-    if (!videoLoaded) return;
+    if (!mediaLoaded) return;
 
     const url = urlInput.value.trim();
     let format, quality, mode;
@@ -185,8 +270,14 @@ async function baixar() {
         document.getElementById("btn-download-video").disabled = true;
     }
 
-    setStatus("Iniciando download...", "info");
+    const label = isPlaylist ? "playlist" : "mídia";
+    setStatus(`Iniciando download... da ${label}`, "info");
     showProgress(0);
+
+    if (isPlaylist) {
+        document.getElementById("progress-track-info").style.display = "block";
+        document.getElementById("progress-track-info").textContent = "Preparando...";
+    }
 
     const response = await fetch(`${API}/download`, {
         method: "POST",
@@ -218,14 +309,27 @@ async function baixar() {
             try {
                 const event = JSON.parse(line.slice(6));
 
+                if (event.type === "track_start") {
+                    document.getElementById("progress-track-info").textContent =
+                        `Faixa ${event.index} de ${event.total}`;
+                    showProgress(0);
+                    setStatus(`Baixando faixa ${event.index} de ${event.total}...`, "info");
+                }
+
                 if (event.type === "progress") {
                     showProgress(event.percent);
-                    setStatus(`Baixando... ${Math.round(event.percent)}%`, "info");
+                    if (event.track_total) {
+                        setStatus(`Faixa ${event.track_index}/${event.track_total} — ${Math.round(event.percent)}%`, "info");
+                    } else {
+                        setStatus(`Baixando... ${Math.round(event.percent)}%`, "info");
+                    }
                 }
 
                 if (event.type === "done") {
-                    showProgress(100);
-                    setStatus("Concluído!", "success");
+                    const msg = event.is_playlist
+                        ? `Playlist concluída! Baixando ZIP...`
+                        : "Concluído!";
+                    setStatus(msg, "success");
                     setTimeout(() => {
                         const a = document.createElement("a");
                         a.href = `${API}/file/${event.file_id}?filename=${encodeURIComponent(event.filename)}&format=${event.format}`;
@@ -238,6 +342,7 @@ async function baixar() {
                 if (event.type === "error") {
                     setStatus(event.message, "error");
                     hideProgress();
+                    document.getElementById("progress-track-info").style.display = "none";
                     enableButtons();
                 }
             } catch {}
@@ -259,6 +364,7 @@ function showProgress(percent) {
 function hideProgress() {
     setTimeout(() => {
         document.getElementById("progress-wrap").style.display = "none";
+        document.getElementById("progress-track-info").style.display = "none";
     }, 800);
 }
 

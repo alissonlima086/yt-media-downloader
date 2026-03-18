@@ -4,6 +4,10 @@ import subprocess
 import uuid
 import unicodedata
 import json
+import zipfile
+import shutil
+
+import urllib
 
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, StreamingResponse
@@ -34,6 +38,7 @@ MEDIA_TYPES = {
     "opus": "audio/ogg",
     "mp4":  "video/mp4",
     "mkv":  "video/x-matroska",
+    "zip":  "application/zip",
 }
 
 
@@ -62,11 +67,53 @@ def format_duration(seconds: int) -> str:
         return f"{h}:{m:02d}:{s:02d}"
     return f"{m}:{s:02d}"
 
+def is_playlist_url(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    params = urllib.parse.parse_qs(parsed.query)
+    
+    list_id = params.get("list", [""])[0]
+    
+    if list_id.startswith(("RD", "RDMM")):
+        return False
+    
+    return bool(list_id) or "/playlist" in url or "/sets/" in url
 
 @app.post("/info")
 def get_info(request: InfoRequest):
     if not request.url:
         raise HTTPException(status_code=400, detail="URL inválida")
+    
+
+    if is_playlist_url(request.url):
+        command = ["yt-dlp", "--dump-single-json", "--flat-playlist", "--yes-playlist", request.url]
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        data = json.loads(result.stdout)
+
+        playlist_title = data.get("title", "Playlist")
+        raw_entries = data.get("entries", [])
+
+        entries = []
+        for entry in raw_entries:
+            thumbnails = entry.get("thumbnails", [])
+            thumb = thumbnails[-1].get("url", "") if thumbnails else entry.get("thumbnail", "")
+            entries.append({
+                "title": entry.get("title", "Título desconhecido"),
+                "thumbnail": thumb,
+                "duration": format_duration(entry.get("duration", 0)),
+                "channel": entry.get("channel", entry.get("uploader", "")),
+                "url": entry.get("url", entry.get("webpage_url", "")),
+                "id": entry.get("id", ""),
+            })
+
+        if not entries:
+            raise HTTPException(status_code=500, detail="Playlist vazia ou não encontrada")
+
+        return {
+            "type": "playlist",
+            "playlist_title": playlist_title,
+            "count": len(entries),
+            "entries": entries,
+        }
 
     command = ["yt-dlp", "--dump-json", "--no-playlist", request.url]
 
@@ -106,6 +153,7 @@ def get_info(request: InfoRequest):
     qualities.sort(key=lambda x: x["height"], reverse=True)
 
     return {
+        "type": "video",
         "title": data.get("title", "Título desconhecido"),
         "thumbnail": data.get("thumbnail", ""),
         "duration": format_duration(int(duration)) if duration else "—",
@@ -128,10 +176,20 @@ def download_media(request: DownloadRequest):
         raise HTTPException(status_code=400, detail="Formato de vídeo inválido.")
 
     file_id = str(uuid.uuid4())
-    output_template = os.path.join(
-        DOWNLOAD_PATH,
-        f"{file_id} - %(title)s - %(artist)s.%(ext)s"
-    )
+    playlist = is_playlist_url(request.url)
+
+    if playlist:
+        playlist_dir = os.path.join(DOWNLOAD_PATH, file_id)
+        os.makedirs(playlist_dir, exist_ok=True)
+        output_template = os.path.join(
+            playlist_dir,
+            "%(playlist_index)s - %(title)s.%(ext)s"
+        )
+    else:
+        output_template = os.path.join(
+            DOWNLOAD_PATH,
+            f"{file_id} - %(title)s - %(artist)s.%(ext)s"
+        )
 
     def event_stream():
         if mode == "audio":
@@ -173,20 +231,51 @@ def download_media(request: DownloadRequest):
             bufsize=1,
         )
 
+        track_index = 0
+        track_total = 0
+
         for line in process.stdout:
             line = line.strip()
+
+            if playlist:
+                m = re.search(r"\[download\] Downloading item (\d+) of (\d+)", line)
+                if m:
+                    track_index = int(m.group(1))
+                    track_total = int(m.group(2))
+                    yield f"data: {json.dumps({'type': 'track_start', 'index': track_index, 'total': track_total})}\n\n"
+                    continue
+
             if "[download]" in line and "%" in line:
                 match = re.search(r"(\d+(?:\.\d+)?)%", line)
                 if match:
                     percent = float(match.group(1))
-                    yield f"data: {json.dumps({'type': 'progress', 'percent': percent})}\n\n"
+                    payload = {"type": "progress", "percent": percent}
+                    if playlist:
+                        payload["track_index"] = track_index
+                        payload["track_total"] = track_total
+                    yield f"data: {json.dumps(payload)}\n\n"
             elif "[ExtractAudio]" in line or "[Merger]" in line or "Destination" in line:
-                yield f"data: {json.dumps({'type': 'progress', 'percent': 95})}\n\n"
+                payload = {"type": "progress", "percent": 95}
+                if playlist:
+                    payload["track_index"] = track_index
+                    payload["track_total"] = track_total
+                yield f"data: {json.dumps(payload)}\n\n"
 
         process.wait()
 
         if process.returncode != 0:
             yield f"data: {json.dumps({'type': 'error', 'message': 'Erro ao baixar mídia'})}\n\n"
+            return
+        
+        if playlist:
+            pdir = os.path.join(DOWNLOAD_PATH, file_id)
+            zip_path = os.path.join(DOWNLOAD_PATH, f"{file_id}.zip")
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                for fname in sorted(os.listdir(pdir)):
+                    zf.write(os.path.join(pdir, fname), fname)
+            shutil.rmtree(pdir, ignore_errors=True)
+            final_name = sanitize_filename("playlist") + ".zip"
+            yield f"data: {json.dumps({'type': 'done', 'file_id': file_id, 'filename': final_name, 'format': 'zip', 'is_playlist': True})}\n\n"
             return
 
         generated_files = [
@@ -209,7 +298,7 @@ def download_media(request: DownloadRequest):
 
 @app.get("/file/{file_id}")
 def serve_file(file_id: str, filename: str, format: str):
-    all_formats = ALLOWED_AUDIO_FORMATS | ALLOWED_VIDEO_FORMATS
+    all_formats = ALLOWED_AUDIO_FORMATS | ALLOWED_VIDEO_FORMATS | {"zip"}
     if format not in all_formats:
         raise HTTPException(status_code=400, detail="Formato inválido")
     if not re.match(r'^[a-f0-9\-]{36}$', file_id):
