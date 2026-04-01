@@ -4,11 +4,11 @@ WORKDIR /app
 
 # instalacao do ffmpeg para processamento de áudio e vídeo
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ffmpeg \
+ && apt-get install -y --no-install-recommends ffmpeg nodejs npm \
  && rm -rf /var/lib/apt/lists/*
 
 # instalação do yt-dlp e mutagen para manipulação de metadados
-RUN pip install --no-cache-dir yt-dlp mutagen
+RUN pip install --no-cache-dir "yt-dlp[default]" mutagen
 
 # instalar dependencias do backend
 COPY requirements.txt .

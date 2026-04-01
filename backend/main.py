@@ -85,7 +85,7 @@ def get_info(request: InfoRequest):
     
 
     if is_playlist_url(request.url):
-        command = ["yt-dlp", "--dump-single-json", "--flat-playlist", "--yes-playlist", request.url]
+        command = [*_yt_dlp_base_cmd(), "--dump-single-json", "--flat-playlist", "--yes-playlist", request.url]
         result = subprocess.run(command, check=True, capture_output=True, text=True)
         data = json.loads(result.stdout)
 
@@ -115,15 +115,15 @@ def get_info(request: InfoRequest):
             "entries": entries,
         }
 
-    command = ["yt-dlp", "--dump-json", "--no-playlist", request.url]
+    command = [*_yt_dlp_base_cmd(), "--dump-json", "--no-playlist", request.url]
 
     try:
         result = subprocess.run(command, check=True, capture_output=True, text=True)
         data = json.loads(result.stdout)
-    except subprocess.CalledProcessError:
-        raise HTTPException(status_code=500, detail="Erro ao buscar informações")
-    except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Erro ao processar informações")
+    except subprocess.CalledProcessError as e:
+        raise HTTPException(status_code=500, detail=e.stderr)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=500, detail=e.stderr)
 
     duration = data.get("duration", 0)
 
@@ -194,7 +194,7 @@ def download_media(request: DownloadRequest):
     def event_stream():
         if mode == "audio":
             command = [
-                "yt-dlp",
+                *_yt_dlp_base_cmd(),
                 "-f", "bestaudio",
                 "-x", "--audio-format", fmt,
                 "--embed-metadata", "--embed-thumbnail",
@@ -213,7 +213,7 @@ def download_media(request: DownloadRequest):
 
             merge_ext = fmt
             command = [
-                "yt-dlp",
+                *_yt_dlp_base_cmd(),
                 "-f", fmt_selector,
                 "--merge-output-format", merge_ext,
                 "--embed-metadata", "--embed-thumbnail",
@@ -322,3 +322,10 @@ def serve_file(file_id: str, filename: str, format: str):
         # o Content-Disposition garante que os dados de download sejam expostos corretamente para o frontend e que o nome do arquivo seja sugerido corretamente
         headers={"Content-Disposition": f'attachment; filename="{filename}"'}
     )
+
+def _yt_dlp_base_cmd() -> list[str]:
+    return [
+        "yt-dlp",
+        "--extractor-args", "youtube:player_client=tv,web",
+        "--js-runtimes", "node",
+    ]
